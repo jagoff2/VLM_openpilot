@@ -13,6 +13,7 @@ venv/
 a.out
 .hypothesis
 .cache/
+__pycache__/
 bin/
 
 *.mp4
@@ -67,6 +68,13 @@ htmlcov
 *.rlog
 
 build/
+
+# Local POC outputs and downloaded model weights. These are large, machine-local
+# artifacts and should be regenerated or downloaded outside git.
+artifacts/
+models/
+tools/nanoVLM/
+tools/nanoVLM_v01/
 
 !**/.gitkeep
 

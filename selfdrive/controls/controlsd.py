@@ -187,7 +187,7 @@ class Controls:
 
     cs.curvature = self.curvature
     cs.longitudinalPlanMonoTime = self.sm.logMonoTime['longitudinalPlan']
-    cs.lateralPlanMonoTime = self.sm.logMonoTime['modelV2']
+    cs.lateralPlanMonoTime = self.sm.logMonoTime['lateralManeuverPlan'] if self.sm.valid['lateralManeuverPlan'] else self.sm.logMonoTime['modelV2']
     cs.desiredCurvature = self.desired_curvature
     cs.longControlState = self.LoC.long_control_state
     cs.upAccelCmd = float(self.LoC.pid.p)

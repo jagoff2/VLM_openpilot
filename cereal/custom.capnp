@@ -10,7 +10,42 @@ $Cxx.namespace("cereal");
 # DO rename the structs
 # DON'T change the identifier (e.g. @0x81c2f05a394cf4af)
 
-struct CustomReserved0 @0x81c2f05a394cf4af {
+struct ReasonedTrajectoryPlan @0x81c2f05a394cf4af {
+  frameId @0 :UInt32;
+  modelMonoTime @1 :UInt64;
+  planValid @2 :Bool;
+
+  scene @3 :Text;
+  evidence @4 :Text;
+  meta @5 :Text;
+  branch @6 :Text;
+  latBiasM @7 :Float32;
+  speedCapMps @8 :Float32;
+  stopS @9 :Float32;
+  avoid @10 :Text;
+  weights @11 :Text;
+  confidence @12 :Float32;
+
+  generatedTokenCount @13 :UInt16;
+  cameraToSceneBoardMs @14 :Float32;
+  sceneBoardToVlmPrefillMs @15 :Float32;
+  vlmDecodeMs @16 :Float32;
+  rtpParseMs @17 :Float32;
+  pathSynthMs @18 :Float32;
+  publishAgeMs @19 :Float32;
+  controlConsumedAgeMs @20 :Float32;
+  deadlineMissCount @21 :UInt32;
+  invalidRtpCount @22 :UInt32;
+
+  vlmChangedPathMeters @23 :Float32;
+  vlmChangedSpeedMps @24 :Float32;
+  selectedCandidate @25 :Text;
+  desiredCurvature @26 :Float32;
+  vlmBackend @27 :Text;
+  rtpText @28 :Text;
+  invalidReason @29 :Text;
+  rtpSourceFrameId @30 :Int32;
+  rtpAgeFrames @31 :Int16;
 }
 
 struct CustomReserved1 @0xaedffd8f31e7b55d {

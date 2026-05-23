@@ -43,6 +43,9 @@ def long_maneuver(started: bool, params: Params, CP: car.CarParams) -> bool:
 def lat_maneuver(started: bool, params: Params, CP: car.CarParams) -> bool:
   return started and params.get_bool("LateralManeuverMode")
 
+def reasoned_planner(started: bool, params: Params, CP: car.CarParams) -> bool:
+  return started and PC and (params.get_bool("ReasonedPlanner") or os.getenv("ENABLE_REASONED_PLANNER") == "1")
+
 def not_long_maneuver(started: bool, params: Params, CP: car.CarParams) -> bool:
   return started and not params.get_bool("LongitudinalManeuverMode")
 
@@ -102,6 +105,7 @@ procs = [
   PythonProcess("ubloxd", "system.ubloxd.ubloxd", ublox, enabled=TICI),
   PythonProcess("pigeond", "system.ubloxd.pigeond", ublox, enabled=TICI),
   PythonProcess("plannerd", "selfdrive.controls.plannerd", not_long_maneuver),
+  PythonProcess("reasoned_plannerd", "selfdrive.controls.reasoned_plannerd", reasoned_planner, enabled=PC),
   PythonProcess("maneuversd", "tools.longitudinal_maneuvers.maneuversd", long_maneuver),
   PythonProcess("lateral_maneuversd", "tools.lateral_maneuvers.lateral_maneuversd", lat_maneuver),
   PythonProcess("radard", "selfdrive.controls.radard", only_onroad),
