@@ -31,10 +31,13 @@ Output exactly a comma-separated subset of these labels:
 cones,barrier,construction_left,construction_right,pedestrian_in_path,pedestrian_entering_path,vehicle_in_path,vehicle_entering_path,animal_in_path,animal_entering_path,red_stop_light,stop_sign,none
 
 Rules:
-- Include cones if traffic cones, blue cones, construction cones, pylons, bollards, or cone-shaped lane markers are visible.
-- Include barrier if a road barrier, barricade, blue-white checker barrier, construction barrier, or blocked-lane panel is visible.
-- Include construction_left if cones, barriers, pylons, bollards, or blocked-lane panels are mainly on the left side of the green planned path.
-- Include construction_right if cones, barriers, pylons, bollards, or blocked-lane panels are mainly on the right side of the green planned path.
+- Only consider hazards that overlap the green planned path, intrude into the green corridor, narrow/block the path ahead, or are moving/imminently moving into the green corridor.
+- Ignore obstacles that are merely visible beside the road, behind lane lines, on shoulders, along walls, or far outside the planned path.
+- Include cones if traffic cones, blue cones, construction cones, pylons, bollards, or cone-shaped lane markers overlap, intrude into, narrow, or block the green planned path.
+- Include barrier if a road barrier, barricade, blue-white checker barrier, construction barrier, or blocked-lane panel overlaps, intrudes into, narrows, or blocks the green planned path.
+- Include construction_left only if a control-relevant cone/barrier hazard intrudes from the image-left / driver-left side into the green planned path.
+- Include construction_right only if a control-relevant cone/barrier hazard intrudes from the image-right / driver-right side into the green planned path.
+- Ignore tiny distant cone rows, horizon dots, walls, UI text, lane paint, and decorative/off-path construction objects that do not affect the green path.
 - Include pedestrian_in_path only for a visible upright human figure, person, pedestrian, or human body currently overlapping the green planned path or standing/walking directly inside the ego lane corridor ahead. Count small, partially transparent, or green-tinted people if the overlay covers them.
 - Include pedestrian_entering_path only for a visible upright human figure, person, pedestrian, or human body beside the green path that is clearly crossing, walking, stepping, or moving into the green planned path soon.
 - Include vehicle_in_path only if a car, truck, bicycle, motorcycle, or similar road user is currently in the planned path of travel.
@@ -62,10 +65,13 @@ Output exactly a comma-separated subset of these labels:
 cones,barrier,construction_left,construction_right,pedestrian_in_path,pedestrian_entering_path,vehicle_in_path,vehicle_entering_path,animal_in_path,animal_entering_path,red_stop_light,stop_sign,none
 
 Rules:
-- Include cones if traffic cones, blue cones, construction cones, pylons, bollards, or cone-shaped lane markers are visible.
-- Include barrier if a road barrier, barricade, blue-white checker barrier, construction barrier, or blocked-lane panel is visible.
-- Include construction_left if cones, barriers, pylons, bollards, or blocked-lane panels are mainly on the left side of the green planned path.
-- Include construction_right if cones, barriers, pylons, bollards, or blocked-lane panels are mainly on the right side of the green planned path.
+- Only consider hazards that overlap the green planned path, intrude into the green corridor, narrow/block the path ahead, or are moving/imminently moving into the green corridor.
+- Ignore obstacles that are merely visible beside the road, behind lane lines, on shoulders, along walls, or far outside the planned path.
+- Include cones if traffic cones, blue cones, construction cones, pylons, bollards, or cone-shaped lane markers overlap, intrude into, narrow, or block the green planned path.
+- Include barrier if a road barrier, barricade, blue-white checker barrier, construction barrier, or blocked-lane panel overlaps, intrudes into, narrows, or blocks the green planned path.
+- Include construction_left only if a control-relevant cone/barrier hazard intrudes from the image-left / driver-left side into the green planned path.
+- Include construction_right only if a control-relevant cone/barrier hazard intrudes from the image-right / driver-right side into the green planned path.
+- Ignore tiny distant cone rows, horizon dots, walls, UI text, lane paint, and decorative/off-path construction objects that do not affect the green path.
 - Include pedestrian_in_path only for a visible upright human figure, person, pedestrian, or human body currently overlapping the green planned path or standing/walking directly inside the ego lane corridor ahead. Count small, partially transparent, or green-tinted people if the overlay covers them.
 - Include pedestrian_entering_path only for a visible upright human figure, person, pedestrian, or human body beside the green path that is clearly crossing, walking, stepping, or moving into the green planned path soon.
 - Include vehicle_in_path only if a car, truck, bicycle, motorcycle, or similar road user is currently in the planned path of travel.
@@ -89,10 +95,13 @@ Output exactly a comma-separated subset of these labels:
 cones,barrier,construction_left,construction_right,pedestrian_in_path,pedestrian_entering_path,vehicle_in_path,vehicle_entering_path,animal_in_path,animal_entering_path,red_stop_light,stop_sign,none
 
 Rules:
-- Include cones if traffic cones, blue cones, construction cones, pylons, bollards, or cone-shaped lane markers are visible.
-- Include barrier if a road barrier, barricade, blue-white checker barrier, construction barrier, or blocked-lane panel is visible.
-- Include construction_left if cones, barriers, pylons, bollards, or blocked-lane panels are mainly on the left side of the green planned path.
-- Include construction_right if cones, barriers, pylons, bollards, or blocked-lane panels are mainly on the right side of the green planned path.
+- Only consider hazards that overlap the green planned path, intrude into the green corridor, narrow/block the path ahead, or are moving/imminently moving into the green corridor.
+- Ignore obstacles that are merely visible beside the road, behind lane lines, on shoulders, along walls, or far outside the planned path.
+- Include cones if traffic cones, blue cones, construction cones, pylons, bollards, or cone-shaped lane markers overlap, intrude into, narrow, or block the green planned path.
+- Include barrier if a road barrier, barricade, blue-white checker barrier, construction barrier, or blocked-lane panel overlaps, intrudes into, narrows, or blocks the green planned path.
+- Include construction_left only if a control-relevant cone/barrier hazard intrudes from the image-left / driver-left side into the green planned path.
+- Include construction_right only if a control-relevant cone/barrier hazard intrudes from the image-right / driver-right side into the green planned path.
+- Ignore tiny distant cone rows, horizon dots, walls, UI text, lane paint, and decorative/off-path construction objects that do not affect the green path.
 - Include pedestrian_in_path only for a visible upright human figure, person, pedestrian, or human body currently overlapping the green planned path or standing/walking directly inside the ego lane corridor ahead. Count small, partially transparent, or green-tinted people if the overlay covers them.
 - Include pedestrian_entering_path only for a visible upright human figure, person, pedestrian, or human body beside the green path that is clearly crossing, walking, stepping, or moving into the green planned path soon.
 - Include vehicle_in_path only if a car, truck, bicycle, motorcycle, or similar road user is currently in the planned path of travel.
@@ -109,12 +118,18 @@ Rules:
 - Output none only if no listed hazard is visible.
 - No prose."""
 
-SCORE_PROMPT = """Score one driving-scene label from the image.
+SCORE_PROMPT = """Score one driving-scene label from the driver-view image.
 The green overlay is the ego planned path.
 Answer exactly yes or no.
 Answer yes only when the question condition is directly visible.
-For pedestrian/vehicle/animal path questions, the agent must overlap the green path or clearly be entering it.
-For construction questions, visible blue cones, pylons, bollards, barricades, checker panels, and blocked-lane panels count. Left and right are relative to the green planned path in the image.
+Only consider hazards that overlap the green path, intrude into the green corridor, narrow/block the path ahead, or are moving/imminently moving into the green corridor.
+Ignore objects that are merely visible beside the road, on shoulders, along walls, behind lane lines, or far outside the planned path.
+For pedestrian/vehicle/animal path questions, the agent must overlap the green path or clearly be entering it based on inferred path of travel.
+For construction side questions, consider only control-relevant cones, pylons, bollards, barricades, checker panels, or blocked-lane panels that intrude into, narrow, or block the green path.
+Ignore tiny distant cone rows, horizon dots, walls, lane paint, UI text, and decorative/off-path construction objects.
+Construction left/right means the side of the green path in the driver-view image, not simulator lane-coordinate sign.
+If the relevant construction hazard intrudes from image-left / driver-left into the green path, answer yes only to construction_left.
+If the relevant construction hazard intrudes from image-right / driver-right into the green path, answer yes only to construction_right.
 Do not treat UI text, lane lines, route arrows, shadows, poles, or signs as pedestrians."""
 
 PATH_CONFLICT_LABELS = {
@@ -149,11 +164,12 @@ DEFAULT_DURABLE_SCORE_LABELS = SCORE_LABELS
 EXCLUSIVE_LABEL_GROUPS = (
   frozenset(("construction_left", "construction_right")),
 )
+EXCLUSIVE_LABEL_MIN_MARGIN = 0.05
 SCORE_QUESTIONS = {
-  "cones": "Are any traffic cones, blue cones, construction cones, pylons, bollards, or cone-shaped lane markers visible?",
-  "barrier": "Is any road barrier, barricade, blue-white checker barrier, construction barrier, or blocked-lane panel visible?",
-  "construction_left": "Are cones, blue cones, construction cones, pylons, bollards, road barriers, barricades, checker panels, or blocked-lane panels mainly on the left side of the green planned path?",
-  "construction_right": "Are cones, blue cones, construction cones, pylons, bollards, road barriers, barricades, checker panels, or blocked-lane panels mainly on the right side of the green planned path?",
+  "cones": "Are any traffic cones, blue cones, construction cones, pylons, bollards, or cone-shaped lane markers overlapping, intruding into, narrowing, or blocking the green planned path?",
+  "barrier": "Is any road barrier, barricade, blue-white checker barrier, construction barrier, or blocked-lane panel overlapping, intruding into, narrowing, or blocking the green planned path?",
+  "construction_left": "Does a cone, pylon, bollard, barricade, barrier, or blocked-lane panel intrude from image-left / driver-left into the green planned path?",
+  "construction_right": "Does a cone, pylon, bollard, barricade, barrier, or blocked-lane panel intrude from image-right / driver-right into the green planned path?",
   "pedestrian_in_path": "Is any visible upright human figure, person, pedestrian, or human body partly or fully inside the green planned path or directly blocking the ego lane ahead, even if small or partially transparent?",
   "pedestrian_entering_path": "Is any visible upright human figure, person, pedestrian, or human body next to the green planned path and clearly crossing, walking, stepping, or moving into that green path soon?",
   "vehicle_in_path": "Is a car, truck, bicycle, motorcycle, or similar road user currently overlapping the green planned path or directly blocking the ego lane corridor ahead?",
@@ -250,9 +266,12 @@ def _resolve_exclusive_labels(labels: set[str], scores: dict[str, float]) -> set
     active = resolved & group
     if len(active) <= 1:
       continue
-    best = max(active, key=lambda label: scores.get(label, float("-inf")))
+    ordered = sorted(active, key=lambda label: scores.get(label, float("-inf")), reverse=True)
     resolved.difference_update(group)
-    resolved.add(best)
+    best = ordered[0]
+    runner_up = ordered[1]
+    if scores.get(best, float("-inf")) - scores.get(runner_up, float("-inf")) >= EXCLUSIVE_LABEL_MIN_MARGIN:
+      resolved.add(best)
   return resolved
 
 

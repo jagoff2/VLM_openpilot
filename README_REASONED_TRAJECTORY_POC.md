@@ -12,10 +12,12 @@ scene constraints from a driver-UI-style scene board. Those constraints are
 compiled into a deterministic trajectory program, then into path/curvature and
 speed constraints that remain inside the existing planner/control boundary.
 
-The current working demo runs on this PC in MetaDrive with a Qwen2.5-VL-3B
-backend on the local NVIDIA GPU. The original target direction remains an eGPU
-path, but the checked-in code currently uses the local PC GPU backend for the
-working demo.
+The current working demo runs on this PC in MetaDrive with a TensorRT
+Qwen2.5-VL-3B label-scoring backend on the local NVIDIA RTX 5060 Ti. The fast
+path is synchronous and same-frame: one VLM scoring pass per MetaDrive frame,
+with strict manifest checks and a 50 ms planning deadline. The original target
+direction remains an eGPU path, but the checked-in working demo currently uses
+the local NVIDIA PC GPU backend.
 
 ## Current Status
 
@@ -26,11 +28,18 @@ Working:
 - Strict `RTPv1` parser with bounded fields and grammar validation.
 - Deterministic PathSynth compiler for lateral bias, avoid zones, speed
   modifiers, stop/yield constraints, and candidate selection.
-- Qwen2.5-VL-3B label worker that sees a full 384 px driver-UI-style overlay
-  scene board.
-- Optimized async loop that keeps the sim/control path nonblocking and tracks
-  source-frame age.
-- MetaDrive closed-loop demo comparing stock path following versus the VLM
+- TensorRT Qwen2.5-VL-3B fast label scorer:
+  - fixed full-frame `168 px` scene-board input,
+  - FP16 TensorRT vision tower,
+  - NVFP4 TensorRT text/label scorer,
+  - fixed `text_seq_len=220`,
+  - strict runtime manifest for prompt, labels, thresholds, image mode, image
+    size, model config, and engine shapes.
+- Synchronous MetaDrive loop that publishes same-frame VLM plans at 20 Hz with
+  zero stale-frame reuse in the fast path.
+- Older PyTorch/full384 async Qwen worker retained for diagnostics and visual
+  quality experiments.
+- MetaDrive closed-loop demos comparing stock path following versus the VLM
   reasoned trajectory path.
 - Video generation for stock, VLM, padded stock, and side-by-side comparisons.
 - Unit tests for RTP parsing, PathSynth, relative speed caps, durable speed
@@ -39,16 +48,23 @@ Working:
 
 Known limitations:
 
-- Qwen2.5-VL-3B via PyTorch/CUDA is too slow for synchronous 20 Hz model-loop
-  use on this PC. The working path is bounded async.
-- The current Qwen backend is CUDA/NVIDIA. It is not yet a tinygrad AMD eGPU
-  backend.
-- The measured Qwen VRAM footprint is about 7.4 GiB after model load and about
-  7.7 GiB after one full384 score inference. A clean 8 GiB eGPU may be possible
-  only with very tight memory discipline, quantization, or a smaller model. It
-  is not a comfortable target for this exact fp16 Qwen path.
-- Model weights and run artifacts are intentionally ignored by git. They must
-  be downloaded or regenerated locally.
+- The realtime path is no longer open-ended Qwen image-to-text generation. It
+  uses Qwen as a constrained visual label scorer, then deterministically
+  compiles labels into RTP fields.
+- The fast runtime is shape-bound by design. Changing prompt text, label groups,
+  thresholds, image size, model files, or selected engine shapes requires a
+  matching manifest and may require rebuilding TensorRT engines.
+- The fast input is `full168`, which is much faster than full384 but loses
+  visual detail. This is the largest accuracy sacrifice in the current speed
+  path.
+- The latest lateral-only mixed run proves realtime lateral control influence
+  and clears the sign-fixed construction seed better than stock. It does not
+  validate pedestrian handling because VLM speed control is intentionally
+  disabled in that mode.
+- The current fast Qwen backend is CUDA/TensorRT/NVIDIA. It is not yet a
+  tinygrad AMD eGPU backend.
+- Model weights, TensorRT engines, and run artifacts are intentionally ignored
+  by git. They must be downloaded, built, or copied locally.
 - The MetaDrive demo proves control influence and closed-loop behavior in sim.
   It does not prove real-world safety.
 
@@ -60,10 +76,13 @@ At a high level:
 camera frame + vehicle state
         |
         v
-driver-UI-style scene board
+driver-UI-style scene board, fixed full168 for fast path
         |
         v
-Qwen VLM label scorer
+TensorRT Qwen VLM label scorer
+        |
+        v
+label-to-RTP compiler
         |
         v
 strict RTPv1 program
@@ -78,9 +97,10 @@ bounded lateral/speed plan
 lateralManeuverPlan / controlsd path
 ```
 
-The VLM does not command steering, torque, throttle, brake, CAN, or panda. It
-only emits bounded semantic constraints. The compiler turns those constraints
-into path candidates, speed caps, and avoid-zone costs.
+The VLM does not command steering, torque, throttle, brake, CAN, or panda. In
+the fast path it only scores visual labels. The label compiler emits bounded
+semantic constraints, and PathSynth turns those constraints into path candidates,
+speed caps, and avoid-zone costs.
 
 The important boundary is:
 
@@ -118,10 +138,16 @@ Core runtime:
   - Static RTP backend for non-VLM tests.
   - External subprocess backend for GPU VLM workers.
   - Async worker mode with latest-frame behavior and source-frame age metadata.
+  - Persistent JSONL backend with ready-marker support for prewarmed TensorRT
+    workers.
+  - JPEG scene-board transport for lower IPC overhead.
 
 - `selfdrive/controls/reasoned/ui_scene_board.py`
   - Full-frame, driver-UI-style scene board used by the VLM.
   - Includes camera frame, path overlay, HUD state, and visual affordances.
+  - The green planned corridor is intentionally widened by 25% versus the
+    previous POC overlay (`0.48 m` to `0.60 m` half-width) so Qwen evaluates a
+    vehicle-width corridor rather than a narrow center ribbon.
 
 - `selfdrive/controls/reasoned_plannerd.py`
   - PC-only process that consumes `modelV2` and `carState`, runs the reasoned
@@ -148,8 +174,16 @@ Openpilot integration:
 
 POC tools:
 
+- `tools/reasoned_trajectory_poc/qwen_trt_label_engine.py`
+  - Current fast Qwen backend.
+  - Exports/builds fixed-shape ONNX/TensorRT engines.
+  - Runs the persistent JSONL label-scoring worker used by the synchronous demo.
+  - Supports `check-artifacts`, strict runtime manifests, and a 50 ms `gate`.
+  - Uses rotating two-label groups with a shared fixed-shape text engine.
+  - Emits strict RTP from scored labels.
+
 - `tools/reasoned_trajectory_poc/qwen_label_rtp_worker.py`
-  - Current default VLM worker.
+  - Older PyTorch/CUDA VLM worker retained for diagnostics.
   - Uses full384 scene boards.
   - Uses batched yes/no label scoring instead of free-form RTP generation.
   - Rotates label groups to reduce latency.
@@ -174,6 +208,10 @@ POC tools:
 
 - `tools/reasoned_trajectory_poc/benchmark_vlm_backend.py`
   - Backend timing harness.
+
+- `tools/reasoned_trajectory_poc/evaluate_qwen_trt_video.py`
+  - Runs the TensorRT scorer against a real input video and reports whether the
+    system would have attempted lateral modification.
 
 - `tools/reasoned_trajectory_poc/probe_qwen_novel_scenes.py`
   - One-frame Qwen scene probing in MetaDrive.
@@ -269,47 +307,83 @@ does the deterministic movement.
 
 ## VLM Backend
 
-The current working backend is:
+The current fast backend is:
+
+```text
+tools/reasoned_trajectory_poc/qwen_trt_label_engine.py
+```
+
+Runtime model:
+
+```text
+Qwen/Qwen2.5-VL-3B-Instruct
+local model dir: models/vlm/qwen2_5_vl_3b_instruct
+CUDA toolkit: C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.2
+TensorRT: 10.16.1.11
+GPU used for current fast path: RTX 5060 Ti 16 GB, compute capability 12.0
+```
+
+Current external TensorRT artifacts:
+
+```text
+F:\qwen_trt_export\nvfp4_trt\qwen_text_36layer_nvfp4_trt.engine
+F:\qwen_trt_export\nvfp4_trt\qwen_text_36layer_nvfp4_trt.onnx
+F:\qwen_trt_export\vision_static_fp16\qwen_vision_full168_static_fp16.engine
+F:\qwen_trt_export\vision_static_fp16\qwen_vision_full168_static_fp16.onnx
+F:\qwen_trt_export\qwen_trt_runtime_manifest.json
+```
+
+Current behavior contract hash:
+
+```text
+cf6c028ed0580f03db61300884c0b777bad6c750741998d64fdf98a0d5319f29
+```
+
+Fast runtime defaults:
+
+```text
+--image-mode full
+--image-size 168
+--text-seq-len 220
+--score-rotate-groups
+--score-rotate-shared-engine
+--score-label-groups "construction_left,construction_right;pedestrian_in_path,pedestrian_entering_path;vehicle_in_path,vehicle_entering_path"
+--score-thresholds "pedestrian_in_path:0.5,pedestrian_entering_path:0.5,vehicle_in_path:0.5,vehicle_entering_path:0.5"
+--require-manifest
+```
+
+The active prompt contract tells Qwen to consider only hazards that overlap,
+intrude into, narrow, block, or are imminently entering the green planned
+corridor. Cones, barriers, pedestrians, vehicles, or other objects that are
+merely visible off to the side should not trigger steering or yielding.
+
+After prompt or scene-board changes, the strict runtime manifest must be
+rewritten only after validation. The current manifest includes the prompt,
+labels, thresholds, rotating behavior, image contract, and scene-board geometry,
+including the widened `0.60 m` planned-corridor half-width.
+
+The older PyTorch/CUDA backend remains available for diagnostics:
 
 ```text
 tools/reasoned_trajectory_poc/qwen_label_rtp_worker.py
 ```
 
-Defaults:
+That older worker uses full384 scene boards and can be useful for visual-quality
+experiments, but it is too slow for synchronous 20 Hz use.
 
-```text
---image-mode full
---label-mode score
---score-rotate-groups
---score-cache-ttl-frames 60
---score-negative-clear-threshold 2.0
-```
-
-The worker loads model files from:
-
-```text
-models/vlm/qwen2_5_vl_3b_instruct
-```
-
-Those files are intentionally ignored by git. Download them locally before
-running the Qwen backend. The expected model is:
-
-```text
-Qwen/Qwen2.5-VL-3B-Instruct
-```
-
-Example download command:
+Model files are intentionally ignored by git. Download them locally before
+building or running the Qwen backend:
 
 ```powershell
 huggingface-cli download Qwen/Qwen2.5-VL-3B-Instruct --local-dir models\vlm\qwen2_5_vl_3b_instruct
 ```
 
-The current code uses PyTorch CUDA for Qwen. AMD/tinygrad eGPU support is a
-future backend target, not the active working path.
+AMD/tinygrad eGPU support is a future backend target, not the active working
+path.
 
-## VRAM Requirement
+## VRAM And Runtime Requirement
 
-Measured on this machine with Qwen2.5-VL-3B, full384 score mode:
+Legacy PyTorch/CUDA full384 score mode measured on this machine:
 
 ```text
 model load incremental VRAM:        ~7,364 MiB
@@ -330,6 +404,15 @@ For an 8 GB AMD eGPU target, the likely path is a smaller model, quantized model
 or a memory-frugal tinygrad/AMD implementation. The current CUDA worker does not
 prove the 8 GB AMD path.
 
+Current TensorRT fast path requirements are different:
+
+- NVIDIA GPU with TensorRT engine compatibility.
+- CUDA toolkit with `compute_120`/`sm_120` support for this RTX 5060 Ti setup.
+- TensorRT with FP4 support for the NVFP4 text engine.
+- External disk space for engines and ONNX files. Current artifacts live under
+  `F:\qwen_trt_export` and are not committed.
+- Runtime manifest must match the active prompt/label/image/threshold contract.
+
 ## Local Demo Commands
 
 Run focused unit tests:
@@ -346,7 +429,10 @@ py -3.11 -m py_compile `
   selfdrive\controls\reasoned\pathsynth.py `
   selfdrive\controls\reasoned\planner.py `
   selfdrive\controls\reasoned\vlm.py `
+  selfdrive\controls\reasoned\scene_board.py `
   selfdrive\controls\reasoned_plannerd.py `
+  tools\reasoned_trajectory_poc\qwen_trt_label_engine.py `
+  tools\reasoned_trajectory_poc\evaluate_qwen_trt_video.py `
   tools\reasoned_trajectory_poc\qwen_label_rtp_worker.py `
   tools\reasoned_trajectory_poc\run_metadrive_overlay_demo.py `
   tools\reasoned_trajectory_poc\render_demo_videos.py
@@ -362,31 +448,57 @@ py -3.11 tools\reasoned_trajectory_poc\run_local_demo.py `
   --out artifacts\reasoned_trajectory_poc\local_static_demo
 ```
 
-Run the current mixed MetaDrive VLM demo:
+Check that the TensorRT fast-path artifacts and behavior manifest match the
+current code contract:
 
 ```powershell
-$out = 'artifacts\reasoned_trajectory_poc\random_mixed_loop_vlm_relative_speed_600f'
+$env:CUDA_PATH='C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.2'
+$env:CUDA_HOME=$env:CUDA_PATH
+$env:PATH="$env:CUDA_PATH\bin;$env:CUDA_PATH\libnvvp;$env:CUDA_PATH\extras\CUPTI\lib64;$env:PATH"
+
+py -3.11 tools\reasoned_trajectory_poc\qwen_trt_label_engine.py `
+  --artifact-dir F:\qwen_trt_export `
+  --text-engine F:\qwen_trt_export\nvfp4_trt\qwen_text_36layer_nvfp4_trt.engine `
+  --text-seq-len 220 `
+  --score-rotate-shared-engine `
+  --score-thresholds "pedestrian_in_path:0.5,pedestrian_entering_path:0.5,vehicle_in_path:0.5,vehicle_entering_path:0.5" `
+  --score-label-groups "construction_left,construction_right;pedestrian_in_path,pedestrian_entering_path;vehicle_in_path,vehicle_entering_path" `
+  --deadline-ms 50 `
+  --iters 30 `
+  --warmup 3 `
+  --out artifacts\reasoned_trajectory_poc\qwen_trt_50ms_gate_behavior_manifest.json `
+  gate
+```
+
+Run the current synchronous mixed MetaDrive VLM demo at 2.5 m/s with VLM speed
+control disabled, so the comparison isolates lateral behavior:
+
+```powershell
+$env:CUDA_PATH='C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.2'
+$env:CUDA_HOME=$env:CUDA_PATH
+$env:PATH="$env:CUDA_PATH\bin;$env:CUDA_PATH\libnvvp;$env:CUDA_PATH\extras\CUPTI\lib64;$env:PATH"
+
+$out = 'artifacts\reasoned_trajectory_poc\metadrive_trt_fast_mixed_300_2p5mps_lateral_only'
 New-Item -ItemType Directory -Force -Path $out | Out-Null
 
-$env:RTP_VLM_IMAGE_SIZE = '384'
-$env:RTP_VLM_STDERR_PATH = "$out\qwen_worker_stderr.log"
-$env:RTP_VLM_SERVER_COMMAND = 'py -3.11 tools\reasoned_trajectory_poc\qwen_label_rtp_worker.py'
+$env:RTP_VLM_WAIT_READY = '1'
+$env:RTP_VLM_IMAGE_FORMAT = 'jpeg'
+$env:RTP_VLM_JPEG_QUALITY = '85'
+$env:RTP_VLM_STDERR_PATH = "$out\vlm_stderr.log"
+$env:RTP_VLM_SERVER_COMMAND = 'py -3.11 tools\reasoned_trajectory_poc\qwen_trt_label_engine.py --artifact-dir F:\qwen_trt_export --text-engine F:\qwen_trt_export\nvfp4_trt\qwen_text_36layer_nvfp4_trt.engine --text-seq-len 220 --score-rotate-groups --score-rotate-shared-engine --score-thresholds "pedestrian_in_path:0.5,pedestrian_entering_path:0.5,vehicle_in_path:0.5,vehicle_entering_path:0.5" --score-label-groups "construction_left,construction_right;pedestrian_in_path,pedestrian_entering_path;vehicle_in_path,vehicle_entering_path" --require-manifest --ready-jsonl serve'
 
 py -3.11 tools\reasoned_trajectory_poc\run_metadrive_overlay_demo.py `
-  --frames 600 `
   --engine vlm `
-  --async-vlm `
-  --vlm-period-frames 1 `
-  --vlm-max-age-frames 8 `
-  --vlm-latest-only `
-  --vlm-drop-stale-results `
-  --vlm-max-result-age-frames 8 `
-  --prewarm-seconds 30 `
-  --deadline-ms 50 `
-  --tick-sec 0.05 `
-  --map O `
   --novel-scene random_mixed `
-  --save-every 5 `
+  --frames 300 `
+  --speed-mps 2.5 `
+  --disable-vlm-speed-control `
+  --tick-sec 0.05 `
+  --deadline-ms 50 `
+  --save-every 1 `
+  --map 3 `
+  --seed 7 `
+  --random-scene-seed 42 `
   --out $out
 ```
 
@@ -394,8 +506,9 @@ Render videos after a run:
 
 ```powershell
 py -3.11 tools\reasoned_trajectory_poc\render_demo_videos.py `
-  --run-dir artifacts\reasoned_trajectory_poc\random_mixed_loop_vlm_relative_speed_600f `
-  --prefix random_mixed_relative_speed_600f
+  --run-dir artifacts\reasoned_trajectory_poc\metadrive_trt_fast_mixed_300_2p5mps_lateral_only `
+  --prefix fast_mixed_300_sync_2p5mps_lateral_only `
+  --fps 20
 ```
 
 Expected videos:
@@ -409,40 +522,57 @@ artifacts/.../videos/vlm_<prefix>.mp4
 
 ## Latest Measured Demo
 
-Latest relative-speed mixed demo:
+Latest synchronous TensorRT lateral-only mixed demo:
 
 ```text
-artifacts/reasoned_trajectory_poc/random_mixed_loop_vlm_relative_speed_600f
+artifacts/reasoned_trajectory_poc/metadrive_trt_fast_mixed_300_20260523_220505_2p5mps_lateral_only_widecorridor_signfix
 ```
 
 Summary:
 
 ```text
-stock frames:              94
-stock object-crash frames: 23
-stock human-crash frames:  1
+stock frames:                  300
+stock mean speed:              2.3219 m/s
+stock min spawned distance:    1.0730 m
 
-VLM frames:                600
-VLM valid publishes:       381
-VLM deadline misses:       0
-VLM p99 planner overhead:  4.8246 ms
-VLM mean path delta:       1.2336 m
-VLM object-crash frames:   0
-VLM human-crash frames:    0
-VLM min object distance:   1.3529 m
+VLM frames:                    300
+VLM valid publishes:           300
+VLM deadline misses:           0
+VLM same-frame publishes:      300 / 300
+VLM p99 latency:               38.906 ms
+VLM max latency:               39.366 ms
+VLM mean speed:                2.3217 m/s
+VLM min spawned distance:      1.3115 m
+VLM active lateral offset:     -1.25..0.0 MetaDrive m
+VLM dominant avoid source:     right_edge_s8_48_margin1.25
 ```
 
-RTP speed fields in that run:
+Side verification:
 
 ```text
-25%:  273 publishes
-15%:  103 publishes
-none: 5 publishes
+frame 24 visible construction side: image-right
+frame 24 direct Qwen scores: construction_right 5.28125, construction_left 4.30078125
+frame 24 RTP source: right_edge_s8_48_margin1.25
+frame 24 spawned construction laterals ahead: positive
+frame 24 active MetaDrive lateral target: negative
 ```
 
-Because this run uses a `10 m/s` desired speed, `25%` resolves to `2.5 m/s` and
-`15%` resolves to `1.5 m/s`. That is close to the previous fixed-cap behavior
-for this specific run, but it now scales correctly if the desired speed changes.
+Videos:
+
+```text
+artifacts/.../videos/side_by_side_fast_mixed_300_sync_2p5mps_lateral_only_widecorridor_signfix.mp4
+artifacts/.../videos/stock_fast_mixed_300_sync_2p5mps_lateral_only_widecorridor_signfix.mp4
+artifacts/.../videos/vlm_fast_mixed_300_sync_2p5mps_lateral_only_widecorridor_signfix.mp4
+```
+
+The matching manifest-gated 50 ms benchmark is:
+
+```text
+artifacts/reasoned_trajectory_poc/qwen_trt_50ms_gate_widecorridor_signfix_manifest.json
+p99_total_ms 34.458
+max_total_ms 34.458
+contract_sha256 cf6c028ed0580f03db61300884c0b777bad6c750741998d64fdf98a0d5319f29
+```
 
 ## Git Hygiene
 

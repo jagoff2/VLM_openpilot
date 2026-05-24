@@ -20,6 +20,7 @@ class OverlayGeometry:
   horizon_ratio: float = 0.44
   focal_ratio: float = 1.35
   max_draw_distance_m: float = 90.0
+  planned_corridor_half_width_m: float = 0.60
 
 
 class UiSceneBoardRenderer:
@@ -88,7 +89,13 @@ class UiSceneBoardRenderer:
     for offset in (-2.5 * lane_width, 2.5 * lane_width):
       self._draw_strip(draw, base_points, lateral_offset=offset, half_width=0.055, color=(245, 60, 50, 135))
 
-    self._draw_strip(draw, base_points, lateral_offset=0.0, half_width=0.48, color=(35, 210, 105, 105))
+    self._draw_strip(
+      draw,
+      base_points,
+      lateral_offset=0.0,
+      half_width=self.geometry.planned_corridor_half_width_m,
+      color=(35, 210, 105, 105),
+    )
     self._draw_polyline(draw, base_points, lateral_offset=0.0, color=(255, 255, 255, 225), width=2)
 
   def _draw_metric_ticks(self, draw) -> None:

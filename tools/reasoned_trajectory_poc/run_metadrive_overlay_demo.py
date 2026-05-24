@@ -943,7 +943,7 @@ def run_episode(args: argparse.Namespace, mode: str) -> dict:
       desired_lateral_offset_m = compose_lateral_offset(durable_lateral_plans, current_long_m, args.max_durable_offset_m)
       active_lateral_offset_m = _slew(active_lateral_offset_m, desired_lateral_offset_m, args.max_lateral_offset_rate_mps * ctrl_dt)
       current_speed = speed_mps(env)
-      active_speed_cap_mps = compose_speed_cap(durable_speed_plans, current_long_m, args.speed_mps)
+      active_speed_cap_mps = None if args.disable_vlm_speed_control else compose_speed_cap(durable_speed_plans, current_long_m, args.speed_mps)
       target_speed = min(args.speed_mps, active_speed_cap_mps) if active_speed_cap_mps is not None else args.speed_mps
       steer_cmd, gas, control_debug = controller.action(env, target_speed, active_lateral_offset_m, ctrl_dt)
       _, reward, terminated, truncated, info = env.step([steer_cmd, gas])
@@ -965,14 +965,14 @@ def run_episode(args: argparse.Namespace, mode: str) -> dict:
         if result.should_publish and result.synth is not None:
           compiled_lateral_offset_m = float(np.clip(selected_lateral_offset_m(result.synth), -args.max_durable_offset_m, args.max_durable_offset_m))
           new_durable_avoidance = durable_avoidance_from_program(result.program, current_long_m, compiled_lateral_offset_m, args)
-          new_speed_plan = durable_speed_plan_from_program(result.program, current_long_m, args)
+          new_speed_plan = None if args.disable_vlm_speed_control else durable_speed_plan_from_program(result.program, current_long_m, args)
           durable_lateral_plans = update_durable_lateral_plans(durable_lateral_plans, new_durable_avoidance, result.program, current_long_m, args)
           durable_speed_plans = update_durable_speed_plans(durable_speed_plans, new_speed_plan, result.program, current_long_m, args)
 
           desired_lateral_offset_m = compose_lateral_offset(durable_lateral_plans, current_long_m, args.max_durable_offset_m)
           if not durable_lateral_plans:
             desired_lateral_offset_m = openpilot_to_metadrive_lateral_m(compiled_lateral_offset_m)
-          active_speed_cap_mps = compose_speed_cap(durable_speed_plans, current_long_m, args.speed_mps)
+          active_speed_cap_mps = None if args.disable_vlm_speed_control else compose_speed_cap(durable_speed_plans, current_long_m, args.speed_mps)
       elif frame_id % args.save_every == 0:
         board = UiSceneBoardRenderer(args.board_width, args.board_height).render(base_plan, {"v_ego": current_speed, "road_frame": road, "status": "STOCK"})
         board.save(out_dir / f"stock_overlay_{frame_id:04d}.png")
@@ -981,7 +981,7 @@ def run_episode(args: argparse.Namespace, mode: str) -> dict:
       active_lateral_plan_records = active_lateral_plans(durable_lateral_plans, current_long_m)
       active_speed_plan_records = active_speed_plans(durable_speed_plans, current_long_m)
       strongest_lateral_plan = max(active_lateral_plan_records, key=lambda plan: abs(plan.target_offset(current_long_m)), default=None)
-      record_speed_cap_mps = compose_speed_cap(durable_speed_plans, current_long_m, args.speed_mps)
+      record_speed_cap_mps = None if args.disable_vlm_speed_control else compose_speed_cap(durable_speed_plans, current_long_m, args.speed_mps)
       records.append({
         "frame_id": frame_id,
         "mode": mode,
@@ -991,6 +991,7 @@ def run_episode(args: argparse.Namespace, mode: str) -> dict:
         "active_lateral_offset_m": active_lateral_offset_m,
         "desired_lateral_offset_m": desired_lateral_offset_m,
         "target_speed_mps": target_speed,
+        "vlm_speed_control_enabled": not args.disable_vlm_speed_control,
         "control_debug": control_debug,
         "reward": float(reward),
         "terminated": bool(terminated),
@@ -1014,6 +1015,11 @@ def run_episode(args: argparse.Namespace, mode: str) -> dict:
         "reasoned_valid": False if result is None else result.valid,
         "reasoned_deadline_met": True if result is None else result.deadline_met,
         "reasoned_latency_ms": 0.0 if result is None else result.timings.publish_age_ms,
+        "camera_to_scene_board_ms": 0.0 if result is None else result.timings.camera_to_scene_board_ms,
+        "scene_board_to_vlm_prefill_ms": 0.0 if result is None else result.timings.scene_board_to_vlm_prefill_ms,
+        "vlm_decode_ms": 0.0 if result is None else result.timings.vlm_decode_ms,
+        "rtp_parse_ms": 0.0 if result is None else result.timings.rtp_parse_ms,
+        "path_synth_ms": 0.0 if result is None else result.timings.path_synth_ms,
         "rtp_source_frame_id": None if result is None else result.rtp_source_frame_id,
         "rtp_age_frames": None if result is None else result.rtp_age_frames,
         "vlm_backend": "" if result is None else result.vlm_backend,
@@ -1035,6 +1041,11 @@ def run_episode(args: argparse.Namespace, mode: str) -> dict:
 
   latencies = [r["reasoned_latency_ms"] for r in records if mode != "stock"]
   published = [r for r in records if r["reasoned_should_publish"]]
+  rtp_ages = [int(r["rtp_age_frames"]) for r in records if r["rtp_age_frames"] is not None]
+  same_frame_records = [
+    r for r in records
+    if r["rtp_source_frame_id"] is not None and int(r["rtp_source_frame_id"]) == int(r["frame_id"])
+  ]
   summary = {
     "mode": mode,
     "frames": len(records),
@@ -1045,6 +1056,11 @@ def run_episode(args: argparse.Namespace, mode: str) -> dict:
     "mean_latency_ms": statistics.fmean(latencies) if latencies else 0.0,
     "p90_latency_ms": percentile(latencies, 90),
     "p99_latency_ms": percentile(latencies, 99),
+    "p999_latency_ms": percentile(latencies, 99.9),
+    "max_latency_ms": max(latencies) if latencies else 0.0,
+    "same_frame_count": len(same_frame_records),
+    "same_frame_all": len(same_frame_records) == len(records) if mode != "stock" else True,
+    "max_rtp_age_frames": max(rtp_ages) if rtp_ages else 0,
     "mean_path_delta_m": statistics.fmean([r["path_delta_m"] for r in published]) if published else 0.0,
     "mean_speed_delta_mps": statistics.fmean([r["speed_delta_mps"] for r in published]) if published else 0.0,
     "records": records,
@@ -1085,6 +1101,7 @@ def main() -> None:
   parser.add_argument("--steer-smoothing-alpha", type=float, default=0.35)
   parser.add_argument("--durable-override-confidence", type=float, default=0.74)
   parser.add_argument("--durable-conflict-override-confidence", type=float, default=0.70)
+  parser.add_argument("--disable-vlm-speed-control", action="store_true")
   parser.add_argument("--durable-slow-speed-scale", type=float, default=0.25)
   parser.add_argument("--durable-speed-min-horizon-m", type=float, default=30.0)
   parser.add_argument("--durable-speed-recover-m", type=float, default=10.0)

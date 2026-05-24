@@ -62,6 +62,16 @@ class SceneBoard:
     image.save(output, format="PNG")
     return output.getvalue()
 
+  def to_jpeg_bytes(self, quality: int = 85) -> Optional[bytes]:
+    try:
+      from PIL import Image
+    except Exception:
+      return None
+    image = Image.frombytes("RGB", (self.width, self.height), bytes(self.pixels))
+    output = BytesIO()
+    image.save(output, format="JPEG", quality=max(1, min(95, int(quality))), optimize=False)
+    return output.getvalue()
+
   def save(self, path: Path) -> None:
     png = self.to_png_bytes()
     if png is not None:

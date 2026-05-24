@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 import base64
 import json
+import math
+import numbers
 import os
 import shlex
 import subprocess
@@ -95,11 +97,11 @@ class ExternalRtpEngine(RtpEngine):
 
   def generate(self, frame_id: int, board: SceneBoard, vehicle_state: dict[str, float], deadline_ms: float) -> RtpEngineResult:
     start = time.perf_counter()
-    image_bytes = board.to_png_bytes() or board.to_ppm_bytes()
+    image_bytes = _board_image_bytes(board)
     payload = {
       "frame_id": frame_id,
       "prompt": FIXED_RTP_PROMPT,
-      "vehicle_state": vehicle_state,
+      "vehicle_state": _json_vehicle_state(vehicle_state),
       "scene_board_state_text": board.state_text,
       "scene_board_image_b64": base64.b64encode(image_bytes).decode("ascii"),
     }
@@ -157,6 +159,23 @@ class PersistentRtpEngine(RtpEngine):
       bufsize=1,
       env=env,
     )
+    if os.getenv("RTP_VLM_WAIT_READY") == "1":
+      self._wait_ready()
+
+  def _wait_ready(self) -> None:
+    if self.proc.stdout is None:
+      raise VlmError("persistent VLM stdout is not available")
+    line = self.proc.stdout.readline()
+    if not line:
+      raise VlmError(f"persistent VLM exited before ready marker ({self.proc.poll()})")
+    try:
+      response = json.loads(line)
+    except json.JSONDecodeError as exc:
+      raise VlmError(f"persistent VLM returned non-JSON ready marker: {line[:160]}") from exc
+    if response.get("error"):
+      raise VlmError(str(response["error"]))
+    if response.get("ready") is not True:
+      raise VlmError(f"persistent VLM returned unexpected ready marker: {line[:160]}")
 
   def generate(self, frame_id: int, board: SceneBoard, vehicle_state: dict[str, float], deadline_ms: float) -> RtpEngineResult:
     if self.proc.poll() is not None:
@@ -165,12 +184,12 @@ class PersistentRtpEngine(RtpEngine):
       raise VlmError("persistent VLM pipes are not available")
 
     start = time.perf_counter()
-    image_bytes = board.to_png_bytes() or board.to_ppm_bytes()
+    image_bytes = _board_image_bytes(board)
     payload = {
       "frame_id": frame_id,
       "deadline_ms": deadline_ms,
       "prompt": FIXED_RTP_PROMPT,
-      "vehicle_state": vehicle_state,
+      "vehicle_state": _json_vehicle_state(vehicle_state),
       "scene_board_state_text": board.state_text,
       "scene_board_image_b64": base64.b64encode(image_bytes).decode("ascii"),
     }
@@ -372,6 +391,32 @@ def build_rtp_engine() -> RtpEngine:
 def _sanitize_python_env(env: dict[str, str]) -> None:
   if env.get("PYTHONUTF8") not in (None, "0", "1"):
     env.pop("PYTHONUTF8", None)
+
+
+def _board_image_bytes(board: SceneBoard) -> bytes:
+  image_format = os.getenv("RTP_VLM_IMAGE_FORMAT", "png").strip().lower()
+  if image_format in ("jpg", "jpeg"):
+    quality = int(os.getenv("RTP_VLM_JPEG_QUALITY", "85"))
+    return board.to_jpeg_bytes(quality) or board.to_ppm_bytes()
+  if image_format == "ppm":
+    return board.to_ppm_bytes()
+  return board.to_png_bytes() or board.to_ppm_bytes()
+
+
+def _json_vehicle_state(vehicle_state: dict[str, object]) -> dict[str, bool | float | int | str]:
+  out: dict[str, bool | float | int | str] = {}
+  for key, value in vehicle_state.items():
+    if isinstance(value, bool):
+      out[str(key)] = value
+    elif isinstance(value, numbers.Integral):
+      out[str(key)] = int(value)
+    elif isinstance(value, numbers.Real):
+      real_value = float(value)
+      if math.isfinite(real_value):
+        out[str(key)] = real_value
+    elif isinstance(value, str):
+      out[str(key)] = value
+  return out
 
 
 def _split_command(command: str) -> list[str]:
